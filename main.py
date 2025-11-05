@@ -560,10 +560,10 @@ try:
                     if msg == "Инструкция":
                         help_text = (
                             "🧾 Инструкция\n\n"
-                            "• Кнопка «Выбрать» → Записаться. Выберите день, затем время ({TIME1}/{TIME2}).\n"
-                            "• За неделю можно записаться только на слот.\n\n"
-                            "• Кнопка «Перезапись» → очистит ваши записи, потом можно выбрать заново.\n\n"
-                            "• Кнопка «Расписание» → краткая сводка; Внутри кнопка «Подробно» - покажет списки.\n\n"
+                            "• Кнопка «Выбрать» → Записаться на слот. Выберите день, затем время.\n"
+                            "За неделю можно записаться только на слот.\n\n"
+                            "• Кнопка «Перезапись» → очистит ваши записи, затем можно заново записаться.\n\n"
+                            "Кнопка «Расписание» → краткая сводка; Внутри кнопка «Подробно» - покажет список.\n\n"
                             "• Кнопка «Мои записи» → покажет ваши текущие записи."
                         )
                         send_msg(user_id, help_text, kb=user_keyboard())
@@ -637,12 +637,12 @@ try:
                             "• «Расписание» Расписание кратко; кнопка «Подробно» — со списками.\n\n"
                             "• «Ученики» → список всех участников (без админов).\n\n"
                             "• «Админы» → список администраторов.\n\n"
-                            "• «Незаписавшиеся ученики» → ученики без записей.\n"
+                            "• «Незаписавшиеся ученики» → ученики без записей.\n\n"
                             "• «Редактировать» → Записать/Удалить ученика вручную (по порядковому номеру списка/ФИО/id).\n\n"
                             "Команды:\n"
                             "/get\nПросмотр актуальных параметров даты и времени\n\n"
-                            "/set 01.11 02.11 20:05-22:05 09:00-11:00 13 1\n"
-                            "/debug_fs — проверить наличие файлов/Gist"
+                            "/set 15.11 16.11 16:00-18:00 18:00-20:00 13 1\nПример установки новой даты и времени(13 и 1 не менять). После установки все брони очищаются.\n\n"
+                            "/debug_fs — проверить наличие файлов Gist"
                         )
                         send_msg(user_id, txt, kb=admin_root_keyboard(), admin_view=True)
                         continue
@@ -664,7 +664,7 @@ try:
                             names = [name for (_uid, name) in sorted(members_cache, key=lambda x: x[1].lower())]
                             total = len(names)
                             lst = "\n".join(f"{i+1}. {name}" for i, name in enumerate(names)) or "—"
-                            send_msg(user_id, f"👥 Ученики. Всего: {total}\n{lst}", kb=admin_root_keyboard(), admin_view=True)
+                            send_msg(user_id, f"👥 Ученики. Всего: {total}\n\n{lst}", kb=admin_root_keyboard(), admin_view=True)
                         except Exception as e:
                             send_msg(user_id, f"Ошибка: {e}", kb=admin_root_keyboard(), admin_view=True)
                         continue
@@ -674,7 +674,7 @@ try:
                         names = users_get_names(ids)
                         total = len(names)
                         lst = "\n".join(f"{i+1}. {n}" for i, n in enumerate(names)) or "—"
-                        send_msg(user_id, f"🛡 Администраторы. Всего: {total}\n{lst}", kb=admin_root_keyboard(), admin_view=True)
+                        send_msg(user_id, f"🛡 Администраторы. Всего: {total}\n\n{lst}", kb=admin_root_keyboard(), admin_view=True)
                         continue
 
                     if msg == "Незаписавшиеся ученики":
@@ -688,7 +688,7 @@ try:
                                 booked_names.update(sc["users"])
                             not_booked = sorted([name for (_, name) in members_cache if name not in booked_names], key=str.lower)
                             lst = "\n".join(f"{i+1}. {nm}" for i, nm in enumerate(not_booked)) or "—"
-                            send_msg(user_id, f"📋 Незаписавшиеся ученики ({len(not_booked)}):\n{lst}", kb=admin_root_keyboard(), admin_view=True)
+                            send_msg(user_id, f"📋 Незаписавшиеся ученики ({len(not_booked)}):\n\n{lst}", kb=admin_root_keyboard(), admin_view=True)
                         except Exception as e:
                             send_msg(user_id, f"Ошибка: {e}", kb=admin_root_keyboard(), admin_view=True)
                         continue
@@ -716,9 +716,9 @@ try:
                                 booked.update(sc["users"])
                             unbooked = [(uid, name) for (uid, name) in st["candidates"] if name not in booked]
                             if not unbooked:
-                                send_msg(user_id, "Все уже записаны. Можно искать по ФИО/id.\nПришлите фамилию, ФИО, id или номер из списка.", kb=admin_edit_keyboard(), admin_view=True)
+                                send_msg(user_id, "Все уже записаны.\n\n Можно искать по ФИО/id.\nПришлите фамилию, ФИО, id или номер из списка.", kb=admin_edit_keyboard(), admin_view=True)
                             else:
-                                text = "Незаписанные (введите номер/ФИО/id):\n" + "\n".join(
+                                text = "Незаписанные ученики (введите порядковый номер из списка/ФИО/id):\n\n" + "\n".join(
                                     f"{i+1}. {nm}" for i, (_, nm) in enumerate(unbooked[:50])
                                 )
                                 st["candidates"] = unbooked
@@ -735,7 +735,7 @@ try:
                         if not booked_all:
                             send_msg(user_id, "Никто не записан.", kb=admin_edit_keyboard(), admin_view=True)
                         else:
-                            text = "Записанные (введите номер/ФИО/id):\n" + "\n".join(
+                            text = "Записанные ученики (введите порядковый номер из списка/ФИО/id):\n\n" + "\n".join(
                                 f"{i+1}. {nm}" for i, nm in enumerate(booked_all[:50])
                             )
                             st["candidates"] = [(0, nm) for nm in booked_all]
