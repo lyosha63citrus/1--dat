@@ -26,6 +26,29 @@ import json as _json  # отдельный alias для сетевых JSON
 
 load_dotenv()
 
+# ───────────────── Health-check HTTP server for Render ─────────────────
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Render health check expects 200 on /
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+def _start_health_server():
+    try:
+        port = int(os.environ.get("PORT", "10000"))
+        srv = HTTPServer(("", port), _HealthHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        print(f"Health server listening on :{port}")
+    except Exception as e:
+        print("Health server failed:", e)
+
+_start_health_server()
+
+
 # ───────────────── env ─────────────────
 COMMUNITY_TOKEN = os.getenv("VK_TOKEN")
 GROUP_ID       = int(os.getenv("GROUP_ID", "0"))
