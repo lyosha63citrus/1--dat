@@ -1,0 +1,25 @@
+﻿# виртуалки / кэш
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# ОС
+.DS_Store
+Thumbs.db
+
+# приват и runtime-данные
+.env
+state.json
+config_state.json
+
+# логи (если заведёте)
+logs/
+*.log
