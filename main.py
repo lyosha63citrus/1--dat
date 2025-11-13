@@ -602,6 +602,55 @@ try:
                             send_msg(user_id, f"Ошибка при /set: {e}", kb=admin_root_keyboard(), admin_view=True)
                         continue
 
+                                        # ----- расширенная команда /setp (2 независимых дня и 2 независимых времени) -----
+                    if cmd == "/setp" and len(parts) >= 7:
+                        try:
+                            # схема:
+                            # /setp d1 t1 d2 t2 cap max
+                            d1 = parts[1]
+                            t1 = parts[2]
+                            d2 = parts[3]
+                            t2 = parts[4]
+
+                            cap = int(parts[5])
+                            mx  = int(parts[6])
+
+                            global DAY1, DAY2, TIME1, TIME2, CAPACITY, MAX_SLOTS_PER_USER
+
+                            DAY1 = d1
+                            TIME1 = t1
+                            DAY2 = d2
+                            TIME2 = t2
+
+                            CAPACITY = cap
+                            MAX_SLOTS_PER_USER = mx
+
+                            TIMES[:] = _active_times()
+
+                            # полная очистка + создание новых слотов
+                            state.clear()
+                            state.update({"slots": make_slots_map(DAY1, DAY2)})
+                            slots.clear()
+                            slots.update(state["slots"])
+
+                            save_state()
+                            save_globals()
+
+                            msg_ok = (
+                                "✅ Обновлено расширенное расписание (/setp):\n"
+                                f"Слот 1: {DAY1} {TIME1}\n"
+                                f"Слот 2: {DAY2} {TIME2}\n\n"
+                                f"Вместимость: {CAPACITY}\n"
+                                f"Макс. слотов на ученика: {MAX_SLOTS_PER_USER}\n\n"
+                                "Все предыдущие записи очищены."
+                            )
+                            send_msg(user_id, msg_ok, kb=admin_root_keyboard(), admin_view=True)
+
+                        except Exception as e:
+                            send_msg(user_id, f"Ошибка при /setp: {e}", kb=admin_root_keyboard(), admin_view=True)
+                        continue
+
+
                     if cmd == "/debug_fs":
                         here = os.getcwd()
                         has_state = os.path.exists(STATE_FILE)
