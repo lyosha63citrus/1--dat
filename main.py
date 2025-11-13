@@ -644,7 +644,7 @@ try:
                 # ───── текстовые команды админа /get /set /setp /debug_fs ─────
                 if is_admin and raw.startswith("/"):
                     # объявляем глобальные настройки ОДИН раз для всего блока
-                    global DAY1, DAY2, TIME1, TIME2, CAPACITY, MAX_SLOTS_PER_USER, TIMES
+                    
 
                     parts = raw.strip().split()
                     cmd = parts[0].lower()
