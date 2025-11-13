@@ -337,8 +337,6 @@ def admin_root_keyboard() -> VkKeyboard:
 
 def date_keyboard() -> VkKeyboard:
     kb = VkKeyboard(one_time=False)
-    active = _active_days()
-    # всегда есть DAY1
     kb.add_button(DAY1, VkKeyboardColor.SECONDARY)
     if _has_second_day():
         kb.add_button(DAY2, VkKeyboardColor.SECONDARY)
@@ -576,7 +574,6 @@ try:
                                     pass
 
                             # d2 или t2 могут быть "-" → отключение второго дня/времени
-                            global DAY1, DAY2, TIME1, TIME2, CAPACITY, MAX_SLOTS_PER_USER
                             DAY1, DAY2, TIME1, TIME2 = d1, d2, t1, t2
                             TIMES[:] = _active_times()
                             if cap is not None:
