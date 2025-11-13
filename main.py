@@ -1,12 +1,14 @@
-﻿# -*- coding: utf-8 -*-
-# VK-бот расписания: 2 дня × 2 интервала. Хранение в state.json.
+# -*- coding: utf-8 -*-
+# VK-бот расписания: 1–2 дня × 1–2 интервала. Хранение в state.json (+ Gist).
 # «Расписание» -> кратко + подпункт «Подробно» (доступно всем).
 # Админ-меню без «Выбрать» и «Мои записи».
 #
 # ДОБАВЛЕНО:
-# /get  — показать текущие DAY1/DAY2/TIME1/TIME2/CAPACITY/MAX_SLOTS_PER_USER
-# /set <d1> <d2> <t1> <t2> [cap] [max] — обновить даты/время и (опц.) лимиты,
-#                                       пересоздать расписание, очистить записи.
+# /get   — показать текущие DAY1/DAY2/TIME1/TIME2/CAPACITY/MAX_SLOTS_PER_USER + режим.
+# /set <d1> <d2> <t1> <t2> [cap] [max]
+#      — обновить даты/время и (опц.) лимиты, пересоздать расписание, очистить записи.
+#        ЕСЛИ d2 = "-" → используется один день (только d1).
+#        ЕСЛИ t2 = "-" → используется одно время (только t1).
 
 import os
 import json
@@ -75,11 +77,11 @@ if USER_TOKEN:
 else:
     print("ВНИМАНИЕ: USER_TOKEN не найден в .env (админ-команды ограничены)")
 
-# ───────────────── неделя ─────────────────
+# ───────────────── неделя (дефолты из .env) ─────────────────
 DAY1  = os.getenv("DAY1",  "05.11").strip()
-DAY2  = os.getenv("DAY2",  "06.11").strip()
+DAY2  = os.getenv("DAY2",  "06.11").strip()   # может быть "-" для режима 1 день
 TIME1 = os.getenv("TIME1", "16:00-18:00").strip()
-TIME2 = os.getenv("TIME2", "18:00-20:00").strip()
+TIME2 = os.getenv("TIME2", "18:00-20:00").strip()  # может быть "-" для режима 1 время
 TIMES = [TIME1, TIME2]
 
 CAPACITY           = int(os.getenv("CAPACITY", "13"))
@@ -133,6 +135,37 @@ def gist_save(name: str, obj: dict):
     except Exception as e:
         print("Gist save error:", e)
 
+# ───────────────── вспомогательные функции режима ─────────────────
+def _has_second_day() -> bool:
+    return bool(DAY2 and DAY2 != "-")
+
+def _has_second_time() -> bool:
+    return bool(TIME2 and TIME2 != "-")
+
+def _active_days() -> List[str]:
+    """Список активных дней (1 или 2)."""
+    if _has_second_day():
+        return [DAY1, DAY2]
+    return [DAY1]
+
+def _active_times() -> List[str]:
+    """Список активных временных интервалов (1 или 2)."""
+    times: List[str] = [TIME1]
+    if _has_second_time():
+        times.append(TIME2)
+    return times
+
+def _mode_str() -> str:
+    d2 = _has_second_day()
+    t2 = _has_second_time()
+    if d2 and t2:
+        return "2 дня × 2 времени"
+    if d2 and not t2:
+        return "2 дня × 1 время"
+    if not d2 and t2:
+        return "1 день × 2 времени"
+    return "1 день × 1 время"
+
 # ───────────────── persist config to survive restarts ─────────────────
 CONFIG_FILE = "config_state.json"
 
@@ -164,7 +197,7 @@ def load_globals():
             TIME2 = gcfg.get("TIME2", TIME2)
             CAPACITY = int(gcfg.get("CAPACITY", CAPACITY))
             MAX_SLOTS_PER_USER = int(gcfg.get("MAX_SLOTS_PER_USER", MAX_SLOTS_PER_USER))
-            TIMES[:] = [TIME1, TIME2]
+            TIMES[:] = _active_times()
             print("✓ Загружены настройки из Gist")
             return
     except Exception as e:
@@ -172,6 +205,7 @@ def load_globals():
 
     # Иначе — локальный файл
     if not os.path.exists(CONFIG_FILE):
+        TIMES[:] = _active_times()
         return
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -182,27 +216,56 @@ def load_globals():
         TIME2 = data.get("TIME2", TIME2)
         CAPACITY = int(data.get("CAPACITY", CAPACITY))
         MAX_SLOTS_PER_USER = int(data.get("MAX_SLOTS_PER_USER", MAX_SLOTS_PER_USER))
-        TIMES[:] = [TIME1, TIME2]
+        TIMES[:] = _active_times()
         print("✓ Загружены сохранённые настройки из config_state.json")
     except Exception as e:
         print("⚠️ Ошибка чтения config_state.json:", e)
+        TIMES[:] = _active_times()
 
 # подгружаем сохранённые значения (если есть)
 load_globals()
 
+# ───────────────── описание слотов ─────────────────
 def make_slots_map(d1: str, d2: str) -> Dict[str, Dict]:
-    return {
+    """
+    Генерирует слоты в зависимости от режима:
+      D1T1 — всегда (DAY1 + TIME1)
+      D1T2 — если есть TIME2
+      D2T1 — если есть DAY2
+      D2T2 — если есть DAY2 и TIME2
+    """
+    result: Dict[str, Dict] = {
         "D1T1": {"title": f"{d1} {TIME1}", "users": []},
-        "D1T2": {"title": f"{d1} {TIME2}", "users": []},
-        "D2T1": {"title": f"{d2} {TIME1}", "users": []},
-        "D2T2": {"title": f"{d2} {TIME2}", "users": []},
     }
+    if _has_second_time():
+        result["D1T2"] = {"title": f"{d1} {TIME2}", "users": []}
+    if _has_second_day():
+        result["D2T1"] = {"title": f"{d2} {TIME1}", "users": []}
+        if _has_second_time():
+            result["D2T2"] = {"title": f"{d2} {TIME2}", "users": []}
+    return result
+
+def slot_order() -> List[str]:
+    """Порядок слотов для вывода расписания."""
+    codes: List[str] = ["D1T1"]
+    if _has_second_time():
+        codes.append("D1T2")
+    if _has_second_day():
+        codes.append("D2T1")
+        if _has_second_time():
+            codes.append("D2T2")
+    return codes
 
 def slot_code_by(date_str: str, time_str: str) -> str:
-    if date_str == DAY1 and time_str == TIME1: return "D1T1"
-    if date_str == DAY1 and time_str == TIME2: return "D1T2"
-    if date_str == DAY2 and time_str == TIME1: return "D2T1"
-    if date_str == DAY2 and time_str == TIME2: return "D2T2"
+    if date_str == DAY1 and time_str == TIME1:
+        return "D1T1"
+    if date_str == DAY1 and _has_second_time() and time_str == TIME2:
+        return "D1T2"
+    if _has_second_day():
+        if date_str == DAY2 and time_str == TIME1:
+            return "D2T1"
+        if _has_second_time() and date_str == DAY2 and time_str == TIME2:
+            return "D2T2"
     return ""
 
 # ───────────────── state.json ─────────────────
@@ -274,8 +337,11 @@ def admin_root_keyboard() -> VkKeyboard:
 
 def date_keyboard() -> VkKeyboard:
     kb = VkKeyboard(one_time=False)
+    active = _active_days()
+    # всегда есть DAY1
     kb.add_button(DAY1, VkKeyboardColor.SECONDARY)
-    kb.add_button(DAY2, VkKeyboardColor.SECONDARY)
+    if _has_second_day():
+        kb.add_button(DAY2, VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("Отмена", VkKeyboardColor.NEGATIVE)
     return kb
@@ -283,7 +349,8 @@ def date_keyboard() -> VkKeyboard:
 def time_keyboard() -> VkKeyboard:
     kb = VkKeyboard(one_time=False)
     kb.add_button(TIME1, VkKeyboardColor.SECONDARY)
-    kb.add_button(TIME2, VkKeyboardColor.SECONDARY)
+    if _has_second_time():
+        kb.add_button(TIME2, VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("Отмена", VkKeyboardColor.NEGATIVE)
     return kb
@@ -306,7 +373,8 @@ def admin_edit_keyboard() -> VkKeyboard:
 def admin_choose_day_keyboard() -> VkKeyboard:
     kb = VkKeyboard(one_time=False)
     kb.add_button(DAY1, VkKeyboardColor.SECONDARY)
-    kb.add_button(DAY2, VkKeyboardColor.SECONDARY)
+    if _has_second_day():
+        kb.add_button(DAY2, VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("Назад", VkKeyboardColor.PRIMARY)
     return kb
@@ -314,7 +382,8 @@ def admin_choose_day_keyboard() -> VkKeyboard:
 def admin_choose_time_keyboard() -> VkKeyboard:
     kb = VkKeyboard(one_time=False)
     kb.add_button(TIME1, VkKeyboardColor.SECONDARY)
-    kb.add_button(TIME2, VkKeyboardColor.SECONDARY)
+    if _has_second_time():
+        kb.add_button(TIME2, VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("Назад", VkKeyboardColor.PRIMARY)
     return kb
@@ -398,8 +467,10 @@ def roster_with_numbers(users: List[str]) -> str:
 
 def summarize_schedule_for_button() -> str:
     lines = []
-    for code in ["D1T1", "D1T2", "D2T1", "D2T2"]:
-        sl = slots[code]
+    for code in slot_order():
+        sl = slots.get(code)
+        if not sl:
+            continue
         taken = len(sl["users"])
         left  = max(CAPACITY - taken, 0)
         lines.append(f"{sl['title']} | занято: {taken}/{CAPACITY} | свободно: {left}\n\n")
@@ -409,8 +480,10 @@ def summarize_schedule_for_button() -> str:
 
 def full_schedule_text(show_lists: bool = True) -> str:
     lines = []
-    for code in ["D1T1", "D1T2", "D2T1", "D2T2"]:
-        sl = slots[code]
+    for code in slot_order():
+        sl = slots.get(code)
+        if not sl:
+            continue
         users = sl["users"]
         taken = len(users)
         left  = max(CAPACITY - taken, 0)
@@ -470,7 +543,7 @@ try:
 
                 is_admin = user_id in fetch_admin_ids()
 
-                # ───── текстовые команды админа /get /set ─────
+                # ───── текстовые команды админа /get /set /debug_fs ─────
                 if is_admin and raw.startswith("/"):
                     parts = raw.strip().split()
                     cmd = parts[0].lower()
@@ -480,7 +553,8 @@ try:
                             "Текущие параметры:\n"
                             f"DAY1={DAY1}\nDAY2={DAY2}\n"
                             f"TIME1={TIME1}\nTIME2={TIME2}\n"
-                            f"CAPACITY={CAPACITY}\nMAX_SLOTS_PER_USER={MAX_SLOTS_PER_USER}"
+                            f"CAPACITY={CAPACITY}\nMAX_SLOTS_PER_USER={MAX_SLOTS_PER_USER}\n"
+                            f"Режим слотов: {_mode_str()}"
                         )
                         send_msg(user_id, info, kb=admin_root_keyboard(), admin_view=True)
                         continue
@@ -501,13 +575,16 @@ try:
                                 except ValueError:
                                     pass
 
+                            # d2 или t2 могут быть "-" → отключение второго дня/времени
+                            global DAY1, DAY2, TIME1, TIME2, CAPACITY, MAX_SLOTS_PER_USER
                             DAY1, DAY2, TIME1, TIME2 = d1, d2, t1, t2
-                            TIMES[:] = [TIME1, TIME2]
+                            TIMES[:] = _active_times()
                             if cap is not None:
                                 CAPACITY = cap
                             if mx is not None:
                                 MAX_SLOTS_PER_USER = mx
 
+                            # пересоздаём пустые слоты (очищаем записи)
                             state.clear()
                             state.update({"slots": make_slots_map(DAY1, DAY2)})
                             slots.clear()
@@ -520,6 +597,7 @@ try:
                                 f"DAY1={DAY1}, DAY2={DAY2}\n"
                                 f"TIME1={TIME1}, TIME2={TIME2}\n"
                                 f"CAPACITY={CAPACITY}, MAX_SLOTS_PER_USER={MAX_SLOTS_PER_USER}\n"
+                                f"Режим слотов: {_mode_str()}\n"
                                 "Все записи очищены."
                             )
                             send_msg(user_id, msg_ok, kb=admin_root_keyboard(), admin_view=True)
@@ -531,12 +609,15 @@ try:
                         here = os.getcwd()
                         has_state = os.path.exists(STATE_FILE)
                         has_cfg   = os.path.exists(CONFIG_FILE)
-                        send_msg(user_id,
-                                 f"CWD: {here}\n"
-                                 f"state.json: {'есть' if has_state else 'нет'}\n"
-                                 f"config_state.json: {'есть' if has_cfg else 'нет'}\n"
-                                 f"Gist: {'настроен' if (GIST_TOKEN and GIST_ID) else 'не настроен'}",
-                                 kb=admin_root_keyboard(), admin_view=True)
+                        send_msg(
+                            user_id,
+                            f"CWD: {here}\n"
+                            f"state.json: {'есть' if has_state else 'нет'}\n"
+                            f"config_state.json: {'есть' if has_cfg else 'нет'}\n"
+                            f"Gist: {'настроен' if (GIST_TOKEN and GIST_ID) else 'не настроен'}",
+                            kb=admin_root_keyboard(),
+                            admin_view=True
+                        )
                         continue
 
                 # ───── общая «Назад» ─────
@@ -561,9 +642,9 @@ try:
                         help_text = (
                             "🧾 Инструкция\n\n"
                             "• Кнопка «Выбрать» → Записаться на слот. Выберите день, затем время.\n"
-                            "За неделю можно записаться только на слот.\n\n"
+                            f"  Сейчас режим: {_mode_str()}, за неделю можно записаться только на один слот.\n\n"
                             "• Кнопка «Перезапись» → очистит ваши записи, затем можно заново записаться.\n\n"
-                            "Кнопка «Расписание» → краткая сводка; Внутри кнопка «Подробно» - покажет список.\n\n"
+                            "• Кнопка «Расписание» → краткая сводка; внутри кнопка «Подробно» покажет списки.\n\n"
                             "• Кнопка «Мои записи» → покажет ваши текущие записи."
                         )
                         send_msg(user_id, help_text, kb=user_keyboard())
@@ -573,12 +654,12 @@ try:
                         send_msg(user_id, "Выберите дату:", kb=date_keyboard())
                         continue
 
-                    if msg in {DAY1, DAY2}:
+                    if msg in _active_days():
                         pending_date[user_id] = msg
                         send_msg(user_id, f"Дата {msg} выбрана. Теперь выберите время:", kb=time_keyboard())
                         continue
 
-                    if msg in TIMES:
+                    if msg in _active_times():
                         date_str = pending_date.get(user_id)
                         if not date_str:
                             send_msg(user_id, "Сначала выберите дату («Выбрать»).", kb=user_keyboard())
@@ -611,7 +692,11 @@ try:
 
                     if msg == "Мои записи":
                         my = ["• " + sc["title"] for sc in slots.values() if fullname_me in sc["users"]]
-                        send_msg(user_id, "Вы никуда не записаны." if not my else "Ваши записи:\n" + "\n".join(my), kb=user_keyboard())
+                        send_msg(
+                            user_id,
+                            "Вы никуда не записаны." if not my else "Ваши записи:\n" + "\n".join(my),
+                            kb=user_keyboard()
+                        )
                         continue
 
                     if msg == "Расписание":
@@ -634,15 +719,28 @@ try:
                     if msg == "Инструкция":
                         txt = (
                             "📘 Инструкция администратора\n\n"
-                            "• «Расписание» Расписание кратко; кнопка «Подробно» — со списками.\n\n"
+                            "Режим слотов сейчас: " + _mode_str() + "\n\n"
+                            "• «Расписание» — кратко; кнопка «Подробно» — со списками.\n\n"
                             "• «Ученики» → список всех участников (без админов).\n\n"
                             "• «Админы» → список администраторов.\n\n"
                             "• «Незаписавшиеся ученики» → ученики без записей.\n\n"
-                            "• «Редактировать» → Записать/Удалить ученика вручную (по порядковому номеру списка/ФИО/id).\n\n"
+                            "• «Редактировать» → Записать/Удалить ученика вручную "
+                            "(по порядковому номеру списка/ФИО/id).\n\n"
                             "Команды:\n"
-                            "/get\nПросмотр актуальных параметров даты и времени\n\n"
-                            "/set 15.11 16.11 16:00-18:00 18:00-20:00 13 1\nПример установки новой даты и времени(13 и 1 не менять). После установки все брони очищаются.\n\n"
-                            "/debug_fs — проверить наличие файлов Gist"
+                            "/get — просмотр актуальных параметров даты и времени.\n\n"
+                            "/set d1 d2 t1 t2 [cap] [max]\n"
+                            "  d2 = '-' → использовать только один день (d1).\n"
+                            "  t2 = '-' → использовать только одно время (t1).\n\n"
+                            "Примеры:\n"
+                            "• 2 дня × 2 времени:\n"
+                            "  /set 15.11 16.11 16:00-18:00 18:00-20:00 13 1\n\n"
+                            "• 2 дня × 1 время:\n"
+                            "  /set 15.11 16.11 16:00-18:00 - 13 1\n\n"
+                            "• 1 день × 2 времени:\n"
+                            "  /set 15.11 - 16:00-18:00 18:00-20:00 13 1\n\n"
+                            "• 1 день × 1 время:\n"
+                            "  /set 15.11 - 16:00-18:00 - 13 1\n\n"
+                            "/debug_fs — проверить наличие файлов/Gist."
                         )
                         send_msg(user_id, txt, kb=admin_root_keyboard(), admin_view=True)
                         continue
@@ -686,19 +784,37 @@ try:
                             booked_names = set()
                             for sc in slots.values():
                                 booked_names.update(sc["users"])
-                            not_booked = sorted([name for (_, name) in members_cache if name not in booked_names], key=str.lower)
+                            not_booked = sorted(
+                                [name for (_uid, name) in members_cache if name not in booked_names],
+                                key=str.lower
+                            )
                             lst = "\n".join(f"{i+1}. {nm}" for i, nm in enumerate(not_booked)) or "—"
-                            send_msg(user_id, f"📋 Незаписавшиеся ученики ({len(not_booked)}):\n\n{lst}", kb=admin_root_keyboard(), admin_view=True)
+                            send_msg(
+                                user_id,
+                                f"📋 Незаписавшиеся ученики ({len(not_booked)}):\n\n{lst}",
+                                kb=admin_root_keyboard(),
+                                admin_view=True
+                            )
                         except Exception as e:
                             send_msg(user_id, f"Ошибка: {e}", kb=admin_root_keyboard(), admin_view=True)
                         continue
 
                     # РЕДАКТИРОВАНИЕ
-                    st = admin_states.get(user_id) or {"mode": None, "candidates": [], "pending_user": None, "pending_day": None}
+                    st = admin_states.get(user_id) or {
+                        "mode": None,
+                        "candidates": [],
+                        "pending_user": None,
+                        "pending_day": None
+                    }
                     admin_states[user_id] = st
 
                     if msg == "Редактировать":
-                        send_msg(user_id, "Режим редактирования. Выберите действие:", kb=admin_edit_keyboard(), admin_view=True)
+                        send_msg(
+                            user_id,
+                            "Режим редактирования. Выберите действие:",
+                            kb=admin_edit_keyboard(),
+                            admin_view=True
+                        )
                         continue
 
                     if msg == "Записать":
@@ -716,10 +832,17 @@ try:
                                 booked.update(sc["users"])
                             unbooked = [(uid, name) for (uid, name) in st["candidates"] if name not in booked]
                             if not unbooked:
-                                send_msg(user_id, "Все уже записаны.\n\n Можно искать по ФИО/id.\nПришлите фамилию, ФИО, id или номер из списка.", kb=admin_edit_keyboard(), admin_view=True)
+                                send_msg(
+                                    user_id,
+                                    "Все уже записаны.\n\nМожно искать по ФИО/id.\n"
+                                    "Пришлите фамилию, ФИО, id или номер из списка.",
+                                    kb=admin_edit_keyboard(),
+                                    admin_view=True
+                                )
                             else:
-                                text = "Незаписанные ученики (введите порядковый номер из списка/ФИО/id):\n\n" + "\n".join(
-                                    f"{i+1}. {nm}" for i, (_, nm) in enumerate(unbooked[:50])
+                                text = (
+                                    "Незаписанные ученики (введите порядковый номер из списка/ФИО/id):\n\n" +
+                                    "\n".join(f"{i+1}. {nm}" for i, (_uid, nm) in enumerate(unbooked[:50]))
                                 )
                                 st["candidates"] = unbooked
                                 send_msg(user_id, text, kb=admin_edit_keyboard(), admin_view=True)
@@ -735,8 +858,9 @@ try:
                         if not booked_all:
                             send_msg(user_id, "Никто не записан.", kb=admin_edit_keyboard(), admin_view=True)
                         else:
-                            text = "Записанные ученики (введите порядковый номер из списка/ФИО/id):\n\n" + "\n".join(
-                                f"{i+1}. {nm}" for i, nm in enumerate(booked_all[:50])
+                            text = (
+                                "Записанные ученики (введите порядковый номер из списка/ФИО/id):\n\n" +
+                                "\n".join(f"{i+1}. {nm}" for i, nm in enumerate(booked_all[:50]))
                             )
                             st["candidates"] = [(0, nm) for nm in booked_all]
                             send_msg(user_id, text, kb=admin_edit_keyboard(), admin_view=True)
@@ -746,33 +870,68 @@ try:
                     if st["mode"] in {"add", "remove"}:
                         q = msg.strip()
 
-                        if st["mode"] == "add" and st.get("pending_user") and q in {DAY1, DAY2}:
+                        if st["mode"] == "add" and st.get("pending_user") and q in _active_days():
                             st["pending_day"] = q
-                            send_msg(user_id, f"День {q} выбран. Теперь выберите время:", kb=admin_choose_time_keyboard(), admin_view=True)
+                            send_msg(
+                                user_id,
+                                f"День {q} выбран. Теперь выберите время:",
+                                kb=admin_choose_time_keyboard(),
+                                admin_view=True
+                            )
                             continue
 
-                        if st["mode"] == "add" and st.get("pending_user") and q in TIMES:
+                        if st["mode"] == "add" and st.get("pending_user") and q in _active_times():
                             date_str = st.get("pending_day")
                             if not date_str:
-                                send_msg(user_id, "Сначала выберите день.", kb=admin_choose_day_keyboard(), admin_view=True)
+                                send_msg(
+                                    user_id,
+                                    "Сначала выберите день.",
+                                    kb=admin_choose_day_keyboard(),
+                                    admin_view=True
+                                )
                                 continue
                             code = slot_code_by(date_str, q)
                             if not code:
-                                send_msg(user_id, "Не удалось определить слот.", kb=admin_edit_keyboard(), admin_view=True)
+                                send_msg(
+                                    user_id,
+                                    "Не удалось определить слот.",
+                                    kb=admin_edit_keyboard(),
+                                    admin_view=True
+                                )
                                 continue
                             uid, nm = st["pending_user"]
                             if already_booked_count(nm) >= MAX_SLOTS_PER_USER:
-                                send_msg(user_id, f"У {nm} уже есть запись. Сначала удалите.", kb=admin_edit_keyboard(), admin_view=True)
+                                send_msg(
+                                    user_id,
+                                    f"У {nm} уже есть запись. Сначала удалите.",
+                                    kb=admin_edit_keyboard(),
+                                    admin_view=True
+                                )
                                 continue
                             if nm in slots[code]["users"]:
-                                send_msg(user_id, f"{nm} уже записан в этот слот.", kb=admin_edit_keyboard(), admin_view=True)
+                                send_msg(
+                                    user_id,
+                                    f"{nm} уже записан в этот слот.",
+                                    kb=admin_edit_keyboard(),
+                                    admin_view=True
+                                )
                                 continue
                             if len(slots[code]["users"]) >= CAPACITY:
-                                send_msg(user_id, "Слот заполнен.", kb=admin_edit_keyboard(), admin_view=True)
+                                send_msg(
+                                    user_id,
+                                    "Слот заполнен.",
+                                    kb=admin_edit_keyboard(),
+                                    admin_view=True
+                                )
                                 continue
                             slots[code]["users"].append(nm)
                             save_state()
-                            send_msg(user_id, f"✅ Записал: {nm} → {slots[code]['title']}", kb=admin_root_keyboard(), admin_view=True)
+                            send_msg(
+                                user_id,
+                                f"✅ Записал: {nm} → {slots[code]['title']}",
+                                kb=admin_root_keyboard(),
+                                admin_view=True
+                            )
                             admin_states.pop(user_id, None)
                             continue
 
@@ -789,14 +948,23 @@ try:
                                     try:
                                         members_cache = fetch_members_excluding_admins()
                                     except Exception as e:
-                                        send_msg(user_id, f"Ошибка получения учеников: {e}", kb=admin_root_keyboard(), admin_view=True)
+                                        send_msg(
+                                            user_id,
+                                            f"Ошибка получения учеников: {e}",
+                                            kb=admin_root_keyboard(),
+                                            admin_view=True
+                                        )
                                         continue
                                 found = find_candidates_by_query(q)
                                 if len(found) == 1:
                                     chosen = found[0]
                                 elif len(found) > 1:
-                                    text = "Найдено несколько. Введите номер:\n" + "\n".join(
-                                        f"{i+1}. {nm} (id{uid})" for i, (uid, nm) in enumerate(found[:50])
+                                    text = (
+                                        "Найдено несколько. Введите номер:\n" +
+                                        "\n".join(
+                                            f"{i+1}. {nm} (id{uid})"
+                                            for i, (uid, nm) in enumerate(found[:50])
+                                        )
                                     )
                                     st["candidates"] = found
                                     send_msg(user_id, text, kb=admin_edit_keyboard(), admin_view=True)
@@ -810,21 +978,32 @@ try:
                                     if len(many) == 1:
                                         chosen = (0, many[0])
                                     elif len(many) > 1:
-                                        text = "Найдено несколько. Введите номер:\n" + "\n".join(
-                                            f"{i+1}. {nm}" for i, nm in enumerate(many[:50])
+                                        text = (
+                                            "Найдено несколько. Введите номер:\n" +
+                                            "\n".join(f"{i+1}. {nm}" for i, nm in enumerate(many[:50]))
                                         )
                                         st["candidates"] = [(0, nm) for nm in many]
                                         send_msg(user_id, text, kb=admin_edit_keyboard(), admin_view=True)
                                         continue
 
                         if not chosen:
-                            send_msg(user_id, "Не понял. Введите порядковый номер из списка/ФИО/id или используйте «Назад».", kb=admin_edit_keyboard(), admin_view=True)
+                            send_msg(
+                                user_id,
+                                "Не понял. Введите порядковый номер из списка/ФИО/id или используйте «Назад».",
+                                kb=admin_edit_keyboard(),
+                                admin_view=True
+                            )
                             continue
 
                         uid, nm = chosen
                         if st["mode"] == "add":
                             st["pending_user"] = (uid, nm)
-                            send_msg(user_id, f"Выбрали: {nm}\nТеперь выберите день:", kb=admin_choose_day_keyboard(), admin_view=True)
+                            send_msg(
+                                user_id,
+                                f"Выбрали: {nm}\nТеперь выберите день:",
+                                kb=admin_choose_day_keyboard(),
+                                admin_view=True
+                            )
                             continue
 
                         if st["mode"] == "remove":
@@ -837,7 +1016,12 @@ try:
                                 save_state()
                                 send_msg(user_id, f"🗑 Удалил: {nm}", kb=admin_root_keyboard(), admin_view=True)
                             else:
-                                send_msg(user_id, f"{nm} нигде не найден в записях.", kb=admin_edit_keyboard(), admin_view=True)
+                                send_msg(
+                                    user_id,
+                                    f"{nm} нигде не найден в записях.",
+                                    kb=admin_edit_keyboard(),
+                                    admin_view=True
+                                )
                             admin_states.pop(user_id, None)
                             continue
 
@@ -858,3 +1042,4 @@ except KeyboardInterrupt:
 # 2) В приватном Gist создай файлы state.json и config_state.json с содержимым {}.
 # 3) /set обновляет даты/время и очищает записи, всё сразу пишется в локальные файлы и Gist.
 # 4) При перезапуске/редеплое сперва читаем из Gist, затем из локальных файлов.
+# 5) d2 = "-" → режим на один день; t2 = "-" → режим на одно время.
