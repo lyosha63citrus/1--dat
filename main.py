@@ -360,7 +360,7 @@ slots: Dict[str, Dict] = state["slots"]
 
 # ───────────────── админы/ученики ─────────────────
 MASTER_ID: Optional[int] = int(MASTER_ID_ENV) if (MASTER_ID_ENV and MASTER_ID_ENV.isdigit()) else None
-ADMINS: List[int] = [aid for aid in {MASTER_ID, 1080975674, 20158141} if isinstance(aid, int)]
+ADMINS: List[int] = [aid for aid in {MASTER_ID, 1080975674} if isinstance(aid, int)]
 members_cache: List[Tuple[int, str]] = []   # (user_id, "Имя Фамилия") без админов
 
 # ───────────────── клавиатуры ─────────────────
