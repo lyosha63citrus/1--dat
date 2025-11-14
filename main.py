@@ -1,24 +1,34 @@
 # -*- coding: utf-8 -*-
-# VK-бот расписания: 1–2 дня × 1–2 интервала. Хранение в state.json (+ Gist).
-# «Расписание» -> кратко + подпункт «Подробно» (доступно всем).
-# Админ-меню без «Выбрать» и «Мои записи».
+# VK-бот расписания: 1–2 дня × 1–2 интервала ИЛИ произвольные 1–4 слота.
+# Хранение в state.json (+ Gist), конфиг в config_state.json (+ Gist).
 #
-# ДОБАВЛЕНО:
-# /get   — показать текущие DAY1/DAY2/TIME1/TIME2/CAPACITY/MAX_SLOTS_PER_USER + режим.
-# /set <d1> <d2> <t1> <t2> [cap] [max]
-#      — обновить даты/время и (опц.) лимиты, пересоздать расписание, очистить записи.
-#        ЕСЛИ d2 = "-" → используется один день (только d1).
-#        ЕСЛИ t2 = "-" → используется одно время (только t1).
+# РЕЖИМЫ:
+#   MODE = "classic" — старая сетка: DAY1/DAY2 × TIME1/TIME2, /set
+#   MODE = "pair"    — 2 произвольных слота, /setp
+#   MODE = "flex"    — 1–4 произвольных слота, /setx
 #
-# /setp <d1> <t1> <d2> <t2> [cap] [max]
-#      — режим «2 произвольных слота»:
-#        слот 1: d1 t1
-#        слот 2: d2 t2
-#        (оба слота независимы, без сетки по дням/времени).
+# КОМАНДЫ АДМИНА:
+#   /get
+#       Показать текущие настройки и слоты.
 #
-# Режимы:
-#   MODE="classic" — сетка 1–2 дня × 1–2 времени (команда /set)
-#   MODE="pair"    — 2 произвольных слота (команда /setp)
+#   /set d1 d2 t1 t2 [cap] [max]
+#       Классический режим (MODE=classic), пересоздаёт сетку слотов:
+#         d2 = "-" → один день (только d1)
+#         t2 = "-" → одно время (только t1)
+#
+#   /setp d1 t1 d2 t2 [cap] [max]
+#       ПАРНЫЙ режим (MODE=pair), 2 произвольных слота:
+#         слот 1: d1 t1
+#         слот 2: d2 t2
+#
+#   /setx d1 t1 [d2 t2] [d3 t3] [d4 t4] cap max
+#       ГИБКИЙ режим (MODE=flex), до 4 произвольных слотов.
+#       Перед последними двумя числами (cap, max) идут пары дата/время.
+#       Пример (3 слота):
+#         /setx 18.11 16:00-18:00 18.11 17:00-19:00 20.11 15:00-17:00 13 1
+#
+#   /debug_fs
+#       Проверка файлов и Gist.
 
 import os
 import json
@@ -95,10 +105,10 @@ TIMES = [TIME1, TIME2]
 CAPACITY           = int(os.getenv("CAPACITY", "13"))
 MAX_SLOTS_PER_USER = int(os.getenv("MAX_SLOTS_PER_USER", "1"))
 
-# режим по умолчанию — классический (сеточный)
-MODE = "classic"  # "classic" | "pair"
+# режим расписания (classic / pair / flex)
+MODE = "classic"
 
-# ───────────────── Gist ─────────────────
+# ───────────────── Gist (переживает redeploy) ─────────────────
 GIST_TOKEN = os.getenv("GIST_TOKEN")
 GIST_ID    = os.getenv("GIST_ID")
 
@@ -142,22 +152,25 @@ def gist_save(name: str, obj: dict):
     except Exception as e:
         print("Gist save error:", e)
 
-# ───────────────── режимы (classic / pair) ─────────────────
+# ───────────────── вспомогательные функции режима ─────────────────
+def is_classic() -> bool:
+    return MODE == "classic"
+
 def _has_second_day() -> bool:
-    return MODE == "classic" and bool(DAY2 and DAY2 != "-")
+    return bool(DAY2 and DAY2 != "-")
 
 def _has_second_time() -> bool:
-    return MODE == "classic" and bool(TIME2 and TIME2 != "-")
+    return bool(TIME2 and TIME2 != "-")
 
 def _active_days() -> List[str]:
-    if MODE == "pair":
+    if not is_classic():
         return []
     if _has_second_day():
         return [DAY1, DAY2]
     return [DAY1]
 
 def _active_times() -> List[str]:
-    if MODE == "pair":
+    if not is_classic():
         return []
     times: List[str] = [TIME1]
     if _has_second_time():
@@ -165,29 +178,21 @@ def _active_times() -> List[str]:
     return times
 
 def _mode_str() -> str:
+    if MODE == "classic":
+        d2 = _has_second_day()
+        t2 = _has_second_time()
+        if d2 and t2:
+            return "2 дня × 2 времени"
+        if d2 and not t2:
+            return "2 дня × 1 время"
+        if not d2 and t2:
+            return "1 день × 2 времени"
+        return "1 день × 1 время"
     if MODE == "pair":
-        return "2 произвольных слота"
-    d2 = _has_second_day()
-    t2 = _has_second_time()
-    if d2 and t2:
-        return "2 дня × 2 времени"
-    if d2 and not t2:
-        return "2 дня × 1 время"
-    if not d2 and t2:
-        return "1 день × 2 времени"
-    return "1 день × 1 время"
-
-# подписи для режима pair
-PAIR_SLOT_LABELS = {
-    "S1": "Слот 1",
-    "S2": "Слот 2",
-}
-
-def pair_slot_codes_by_label(label: str) -> Optional[str]:
-    for code, lbl in PAIR_SLOT_LABELS.items():
-        if label == lbl:
-            return code
-    return None
+        return "2 произвольных слота (пара)"
+    if MODE == "flex":
+        return "до 4 произвольных слотов"
+    return MODE
 
 # ───────────────── persist config to survive restarts ─────────────────
 CONFIG_FILE = "config_state.json"
@@ -200,7 +205,7 @@ def save_globals():
         "TIME2": TIME2,
         "CAPACITY": CAPACITY,
         "MAX_SLOTS_PER_USER": MAX_SLOTS_PER_USER,
-        "MODE": MODE
+        "MODE": MODE,
     }
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -222,56 +227,44 @@ def load_globals():
             CAPACITY = int(gcfg.get("CAPACITY", CAPACITY))
             MAX_SLOTS_PER_USER = int(gcfg.get("MAX_SLOTS_PER_USER", MAX_SLOTS_PER_USER))
             MODE = gcfg.get("MODE", MODE)
-            TIMES[:] = [TIME1, TIME2]
-            print(f"✓ Загружены настройки из Gist (режим: {MODE})")
+            TIMES[:] = _active_times()
+            print(f"✓ Загружены настройки из Gist (MODE={MODE})")
             return
     except Exception as e:
         print("⚠️ Ошибка чтения config из Gist:", e)
 
     # Иначе — локальный файл
     if not os.path.exists(CONFIG_FILE):
-        TIMES[:] = [TIME1, TIME2]
+        TIMES[:] = _active_times()
         return
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        DAY1 = data.get("DAY1", DAY1)
-        DAY2 = data.get("DAY2", DAY2)
+        DAY1  = data.get("DAY1", DAY1)
+        DAY2  = data.get("DAY2", DAY2)
         TIME1 = data.get("TIME1", TIME1)
         TIME2 = data.get("TIME2", TIME2)
         CAPACITY = int(data.get("CAPACITY", CAPACITY))
         MAX_SLOTS_PER_USER = int(data.get("MAX_SLOTS_PER_USER", MAX_SLOTS_PER_USER))
         MODE = data.get("MODE", MODE)
-        TIMES[:] = [TIME1, TIME2]
-        print(f"✓ Загружены сохранённые настройки из config_state.json (режим: {MODE})")
+        TIMES[:] = _active_times()
+        print(f"✓ Загружены сохранённые настройки из config_state.json (MODE={MODE})")
     except Exception as e:
         print("⚠️ Ошибка чтения config_state.json:", e)
-        TIMES[:] = [TIME1, TIME2]
+        TIMES[:] = _active_times()
 
 # подгружаем сохранённые значения (если есть)
 load_globals()
 
 # ───────────────── описание слотов ─────────────────
-def make_slots_map(d1: str, d2: str) -> Dict[str, Dict]:
+def make_slots_map_classic(d1: str, d2: str) -> Dict[str, Dict]:
     """
-    classic:
+    Классический режим:
       D1T1 — всегда (DAY1 + TIME1)
       D1T2 — если есть TIME2
       D2T1 — если есть DAY2
       D2T2 — если есть DAY2 и TIME2
-    pair:
-      S1 — DAY1 TIME1
-      S2 — DAY2 TIME2 (если заданы)
     """
-    if MODE == "pair":
-        result: Dict[str, Dict] = {}
-        if DAY1 and TIME1:
-            result["S1"] = {"title": f"{DAY1} {TIME1}", "users": []}
-        if DAY2 and DAY2 != "-" and TIME2 and TIME2 != "-":
-            result["S2"] = {"title": f"{DAY2} {TIME2}", "users": []}
-        return result
-
-    # classic
     result: Dict[str, Dict] = {
         "D1T1": {"title": f"{d1} {TIME1}", "users": []},
     }
@@ -285,30 +278,24 @@ def make_slots_map(d1: str, d2: str) -> Dict[str, Dict]:
 
 def slot_order() -> List[str]:
     """Порядок слотов для вывода расписания."""
-    if MODE == "pair":
-        codes: List[str] = []
-        if "S1" in slots:
-            codes.append("S1")
-        if "S2" in slots:
-            codes.append("S2")
-        return codes
-    codes: List[str] = ["D1T1"]
-    if _has_second_time():
-        codes.append("D1T2")
-    if _has_second_day():
-        codes.append("D2T1")
+    if not state or "slots" not in state:
+        return []
+    if is_classic():
+        codes: List[str] = ["D1T1"]
         if _has_second_time():
-            codes.append("D2T2")
-    return codes
+            codes.append("D1T2")
+        if _has_second_day():
+            codes.append("D2T1")
+            if _has_second_time():
+                codes.append("D2T2")
+        # учитываем только реально существующие
+        return [c for c in codes if c in state["slots"]]
+    # custom режимы: просто сортируем по коду
+    return sorted(state["slots"].keys())
 
 def slot_code_by(date_str: str, time_str: str) -> str:
-    if MODE == "pair":
-        if date_str == DAY1 and time_str == TIME1 and "S1" in slots:
-            return "S1"
-        if date_str == DAY2 and time_str == TIME2 and "S2" in slots:
-            return "S2"
+    if not is_classic():
         return ""
-    # classic
     if date_str == DAY1 and time_str == TIME1:
         return "D1T1"
     if date_str == DAY1 and _has_second_time() and time_str == TIME2:
@@ -324,16 +311,23 @@ def slot_code_by(date_str: str, time_str: str) -> str:
 STATE_FILE = "state.json"
 
 def default_state() -> Dict:
-    return {"slots": make_slots_map(DAY1, DAY2)}
+    if is_classic():
+        return {"slots": make_slots_map_classic(DAY1, DAY2)}
+    # custom режим — по умолчанию пустой список слотов
+    return {"slots": {}}
 
 def load_state() -> Dict:
     # Сначала пробуем Gist
     try:
         g = gist_load("state.json")
         if g and "slots" in g:
-            expected = set(make_slots_map(DAY1, DAY2).keys())
-            if set(g.get("slots", {}).keys()) == expected:
-                print("✓ Загружено состояние из Gist")
+            if is_classic():
+                expected = set(make_slots_map_classic(DAY1, DAY2).keys())
+                if set(g.get("slots", {}).keys()) == expected:
+                    print("✓ Загружено состояние (classic) из Gist")
+                    return g
+            else:
+                print("✓ Загружено состояние (custom) из Gist")
                 return g
     except Exception as e:
         print("⚠️ Ошибка чтения state из Gist:", e)
@@ -343,9 +337,10 @@ def load_state() -> Dict:
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        expected = set(make_slots_map(DAY1, DAY2).keys())
-        if set(data.get("slots", {}).keys()) != expected:
-            return default_state()
+        if is_classic():
+            expected = set(make_slots_map_classic(DAY1, DAY2).keys())
+            if set(data.get("slots", {}).keys()) != expected:
+                return default_state()
         return data
     except Exception:
         return default_state()
@@ -360,7 +355,7 @@ slots: Dict[str, Dict] = state["slots"]
 
 # ───────────────── админы/ученики ─────────────────
 MASTER_ID: Optional[int] = int(MASTER_ID_ENV) if (MASTER_ID_ENV and MASTER_ID_ENV.isdigit()) else None
-ADMINS: List[int] = [aid for aid in {MASTER_ID, 1080975674} if isinstance(aid, int)]
+ADMINS: List[int] = [aid for aid in {MASTER_ID, 1080975674, 20158141} if isinstance(aid, int)]
 members_cache: List[Tuple[int, str]] = []   # (user_id, "Имя Фамилия") без админов
 
 # ───────────────── клавиатуры ─────────────────
@@ -405,24 +400,21 @@ def time_keyboard() -> VkKeyboard:
     kb.add_button("Отмена", VkKeyboardColor.NEGATIVE)
     return kb
 
-def pair_slot_keyboard_user() -> VkKeyboard:
+def slots_keyboard() -> VkKeyboard:
+    """Клавиатура выбора слота для режимов pair/flex."""
     kb = VkKeyboard(one_time=False)
-    if "S1" in slots:
-        kb.add_button(PAIR_SLOT_LABELS["S1"], VkKeyboardColor.SECONDARY)
-    if "S2" in slots:
-        kb.add_button(PAIR_SLOT_LABELS["S2"], VkKeyboardColor.SECONDARY)
-    kb.add_line()
+    any_slot = False
+    for code in slot_order():
+        sl = slots.get(code)
+        if not sl:
+            continue
+        kb.add_button(sl["title"], VkKeyboardColor.SECONDARY)
+        kb.add_line()
+        any_slot = True
+    if not any_slot:
+        kb.add_button("Нет доступных слотов", VkKeyboardColor.NEGATIVE)
+        kb.add_line()
     kb.add_button("Отмена", VkKeyboardColor.NEGATIVE)
-    return kb
-
-def pair_slot_keyboard_admin() -> VkKeyboard:
-    kb = VkKeyboard(one_time=False)
-    if "S1" in slots:
-        kb.add_button(PAIR_SLOT_LABELS["S1"], VkKeyboardColor.SECONDARY)
-    if "S2" in slots:
-        kb.add_button(PAIR_SLOT_LABELS["S2"], VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("Назад", VkKeyboardColor.PRIMARY)
     return kb
 
 def schedule_keyboard() -> VkKeyboard:
@@ -563,6 +555,12 @@ def full_schedule_text(show_lists: bool = True) -> str:
         lines.append("")
     return "\n".join(lines).strip()
 
+def find_slot_by_title(title: str) -> Optional[str]:
+    for code, sl in slots.items():
+        if sl.get("title") == title:
+            return code
+    return None
+
 def find_candidates_by_query(query: str) -> List[Tuple[int, str]]:
     q = query.strip().lower()
     res: List[Tuple[int, str]] = []
@@ -584,7 +582,7 @@ def name_by_id(uid: int) -> str:
 
 # ───────────────── состояния ─────────────────
 admin_states: Dict[int, Dict] = {}
-pending_date: Dict[int, str] = {}  # для classic (выбор даты перед временем)
+pending_date: Dict[int, str] = {}  # для обычных пользователей (classic: выбор даты перед временем)
 
 # ───────────────── проверка токенов ─────────────────
 try:
@@ -613,18 +611,28 @@ try:
 
                 is_admin = user_id in fetch_admin_ids()
 
-                # ───── команды админа ─────
+                # ───── текстовые команды админа /get /set /setp /setx /debug_fs ─────
                 if is_admin and raw.startswith("/"):
                     parts = raw.strip().split()
                     cmd = parts[0].lower()
 
                     if cmd == "/get":
+                        slot_lines = []
+                        for code in slot_order():
+                            sl = slots.get(code)
+                            if not sl:
+                                continue
+                            taken = len(sl["users"])
+                            left  = max(CAPACITY - taken, 0)
+                            slot_lines.append(f"• {sl['title']} | {taken}/{CAPACITY} (свободно {left})")
+                        slots_txt = "\n".join(slot_lines) or "Слотов нет."
                         info = (
                             "Текущие параметры:\n"
+                            f"MODE={MODE} ({_mode_str()})\n"
                             f"DAY1={DAY1}\nDAY2={DAY2}\n"
                             f"TIME1={TIME1}\nTIME2={TIME2}\n"
-                            f"CAPACITY={CAPACITY}\nMAX_SLOTS_PER_USER={MAX_SLOTS_PER_USER}\n"
-                            f"Режим: {_mode_str()} ({MODE})"
+                            f"CAPACITY={CAPACITY}\nMAX_SLOTS_PER_USER={MAX_SLOTS_PER_USER}\n\n"
+                            f"Слоты:\n{slots_txt}"
                         )
                         send_msg(user_id, info, kb=admin_root_keyboard(), admin_view=True)
                         continue
@@ -645,23 +653,26 @@ try:
                                 except ValueError:
                                     pass
 
-                            MODE = "classic"
+                            # d2 или t2 могут быть "-" → отключение второго дня/времени
                             DAY1, DAY2, TIME1, TIME2 = d1, d2, t1, t2
-                            TIMES[:] = [TIME1, TIME2]
                             if cap is not None:
                                 CAPACITY = cap
                             if mx is not None:
                                 MAX_SLOTS_PER_USER = mx
 
+                            MODE = "classic"
+                            TIMES[:] = _active_times()
+
+                            # пересоздаём пустые слоты (очищаем записи)
                             state.clear()
-                            state.update({"slots": make_slots_map(DAY1, DAY2)})
+                            state.update({"slots": make_slots_map_classic(DAY1, DAY2)})
                             slots.clear()
                             slots.update(state["slots"])
                             save_state()
                             save_globals()
 
                             msg_ok = (
-                                "✅ Обновлено расписание (режим classic) и лимиты (если переданы):\n"
+                                "✅ Режим: classic (сеткой) обновлён.\n"
                                 f"DAY1={DAY1}, DAY2={DAY2}\n"
                                 f"TIME1={TIME1}, TIME2={TIME2}\n"
                                 f"CAPACITY={CAPACITY}, MAX_SLOTS_PER_USER={MAX_SLOTS_PER_USER}\n"
@@ -675,6 +686,7 @@ try:
 
                     if cmd == "/setp" and len(parts) >= 5:
                         try:
+                            # /setp d1 t1 d2 t2 [cap] [max]
                             d1, t1, d2, t2 = parts[1:5]
                             cap = None
                             mx  = None
@@ -688,33 +700,90 @@ try:
                                     mx = int(parts[6])
                                 except ValueError:
                                     pass
-
-                            MODE = "pair"
-                            DAY1, TIME1, DAY2, TIME2 = d1, t1, d2, t2
-                            TIMES[:] = [TIME1, TIME2]
                             if cap is not None:
                                 CAPACITY = cap
                             if mx is not None:
                                 MAX_SLOTS_PER_USER = mx
 
+                            MODE = "pair"
+
                             state.clear()
-                            state.update({"slots": make_slots_map(DAY1, DAY2)})
                             slots.clear()
-                            slots.update(state["slots"])
+                            state["slots"] = {}
+                            slots["P1"] = {"title": f"{d1} {t1}", "users": []}
+                            slots["P2"] = {"title": f"{d2} {t2}", "users": []}
+
                             save_state()
                             save_globals()
 
                             msg_ok = (
-                                "✅ Обновлены слоты (режим pair) и лимиты (если переданы):\n"
-                                f"Слот 1: {DAY1} {TIME1}\n"
-                                f"Слот 2: {DAY2} {TIME2}\n"
+                                "✅ Режим: pair (2 произвольных слота) обновлён.\n"
+                                f"Слот 1: {d1} {t1}\n"
+                                f"Слот 2: {d2} {t2}\n"
                                 f"CAPACITY={CAPACITY}, MAX_SLOTS_PER_USER={MAX_SLOTS_PER_USER}\n"
-                                f"Режим слотов: {_mode_str()}\n"
                                 "Все записи очищены."
                             )
                             send_msg(user_id, msg_ok, kb=admin_root_keyboard(), admin_view=True)
                         except Exception as e:
                             send_msg(user_id, f"Ошибка при /setp: {e}", kb=admin_root_keyboard(), admin_view=True)
+                        continue
+
+                    if cmd == "/setx" and len(parts) >= 4:
+                        try:
+                            # /setx d1 t1 [d2 t2] [d3 t3] [d4 t4] cap max
+                            tokens = parts[1:]
+                            if len(tokens) < 4:
+                                raise ValueError("слишком мало аргументов")
+                            try:
+                                max_per = int(tokens[-1])
+                                cap = int(tokens[-2])
+                            except ValueError:
+                                raise ValueError("последние два аргумента должны быть числом: cap max")
+                            pairs_tokens = tokens[:-2]
+                            if len(pairs_tokens) < 2 or len(pairs_tokens) % 2 != 0:
+                                raise ValueError("даты/времена должны идти парами: d t d t ... cap max")
+
+                            CAPACITY = cap
+                            MAX_SLOTS_PER_USER = max_per
+                            MODE = "flex"
+
+                            state.clear()
+                            slots.clear()
+                            state["slots"] = {}
+
+                            codes = ["X1", "X2", "X3", "X4"]
+                            idx = 0
+                            for i in range(0, len(pairs_tokens), 2):
+                                if idx >= len(codes):
+                                    break
+                                d = pairs_tokens[i]
+                                t = pairs_tokens[i+1]
+                                if d == "-" or t == "-":
+                                    continue
+                                code = codes[idx]
+                                state["slots"][code] = {"title": f"{d} {t}", "users": []}
+                                idx += 1
+
+                            if not state["slots"]:
+                                raise ValueError("не удалось создать ни одного слота (проверь даты и время)")
+
+                            slots.update(state["slots"])
+                            save_state()
+                            save_globals()
+
+                            descr = "\n".join(
+                                f"{c}: {sl['title']}"
+                                for c, sl in slots.items()
+                            )
+                            msg_ok = (
+                                "✅ Режим: flex (гибкие слоты) обновлён.\n"
+                                f"CAPACITY={CAPACITY}, MAX_SLOTS_PER_USER={MAX_SLOTS_PER_USER}\n"
+                                "Слоты:\n" + descr + "\n"
+                                "Все записи очищены."
+                            )
+                            send_msg(user_id, msg_ok, kb=admin_root_keyboard(), admin_view=True)
+                        except Exception as e:
+                            send_msg(user_id, f"Ошибка при /setx: {e}", kb=admin_root_keyboard(), admin_view=True)
                         continue
 
                     if cmd == "/debug_fs":
@@ -726,7 +795,8 @@ try:
                             f"CWD: {here}\n"
                             f"state.json: {'есть' if has_state else 'нет'}\n"
                             f"config_state.json: {'есть' if has_cfg else 'нет'}\n"
-                            f"Gist: {'настроен' if (GIST_TOKEN and GIST_ID) else 'не настроен'}",
+                            f"Gist: {'настроен' if (GIST_TOKEN and GIST_ID) else 'не настроен'}\n"
+                            f"MODE={MODE} ({_mode_str()})",
                             kb=admin_root_keyboard(),
                             admin_view=True
                         )
@@ -751,42 +821,26 @@ try:
                         continue
 
                     if msg == "Инструкция":
-                        if MODE == "classic":
-                            help_text = (
-                                "🧾 Инструкция\n\n"
-                                "Сейчас режим: " + _mode_str() + "\n\n"
-                                "• Кнопка «Выбрать» → Записаться. Выберите день, затем время.\n"
-                                f"  Дни: {DAY1}" + (f", {DAY2}" if _has_second_day() else "") + "\n"
-                                f"  Время: {TIME1}" + (f", {TIME2}" if _has_second_time() else "") + "\n\n"
-                                "• За неделю можно записаться только на один слот.\n\n"
-                                "• «Перезапись» → очистит ваши записи, потом можно выбрать заново.\n\n"
-                                "• «Расписание» → краткая сводка; «Подробно» покажет списки.\n\n"
-                                "• «Мои записи» → покажет ваши текущие записи."
-                            )
-                        else:
-                            help_text = (
-                                "🧾 Инструкция\n\n"
-                                "Сейчас режим: 2 произвольных слота\n\n"
-                                "Слот 1: " + (slots.get("S1", {}).get("title", f"{DAY1} {TIME1}")) + "\n"
-                                "Слот 2: " + (slots.get("S2", {}).get("title", f"{DAY2} {TIME2}")) + "\n\n"
-                                "• Кнопка «Выбрать» → выберите «Слот 1» или «Слот 2».\n"
-                                "• За неделю можно записаться только на один слот.\n\n"
-                                "• «Перезапись» → очистит ваши записи, затем можно записаться снова.\n\n"
-                                "• «Расписание» → краткая сводка; «Подробно» покажет списки.\n\n"
-                                "• «Мои записи» → покажет ваши текущие записи."
-                            )
+                        help_text = (
+                            "🧾 Инструкция\n\n"
+                            "• Кнопка «Выбрать» → Записаться на слот.\n"
+                            f"  Сейчас режим: {_mode_str()}, за неделю можно записаться только на один слот.\n\n"
+                            "• Кнопка «Перезапись» → очистит ваши записи, затем можно заново записаться.\n\n"
+                            "• Кнопка «Расписание» → краткая сводка; внутри кнопка «Подробно» покажет списки.\n\n"
+                            "• Кнопка «Мои записи» → покажет ваши текущие записи."
+                        )
                         send_msg(user_id, help_text, kb=user_keyboard())
                         continue
 
                     if msg == "Выбрать":
-                        if MODE == "classic":
+                        if is_classic():
                             send_msg(user_id, "Выберите дату:", kb=date_keyboard())
                         else:
-                            send_msg(user_id, "Выберите слот:", kb=pair_slot_keyboard_user())
+                            send_msg(user_id, "Выберите слот:", kb=slots_keyboard())
                         continue
 
-                    # classic: выбор дня/времени
-                    if MODE == "classic":
+                    if is_classic():
+                        # классический режим: дата → время
                         if msg in _active_days():
                             pending_date[user_id] = msg
                             send_msg(user_id, f"Дата {msg} выбрана. Теперь выберите время:", kb=time_keyboard())
@@ -801,40 +855,36 @@ try:
                             if not code or code not in slots:
                                 send_msg(user_id, "Не удалось определить слот. Попробуйте ещё раз.", kb=user_keyboard())
                                 continue
-                            users = slots[code]["users"]
-                            if fullname_me in users:
-                                send_msg(user_id, "Вы уже записаны в этот слот.", kb=user_keyboard())
-                                continue
-                            if already_booked_count(fullname_me) >= MAX_SLOTS_PER_USER:
-                                send_msg(user_id, "У вас уже есть запись. Используйте «Перезапись».", kb=user_keyboard())
-                                continue
-                            if len(users) >= CAPACITY:
-                                send_msg(user_id, f"Лимит слота ({CAPACITY}) исчерпан.", kb=user_keyboard())
-                                continue
-                            users.append(fullname_me)
-                            save_state()
-                            pending_date.pop(user_id, None)
-                            send_msg(user_id, f"✅ Записаны: {slots[code]['title']}", kb=user_keyboard())
+                        else:
+                            code = None
+                    else:
+                        # custom режимы: выбираем слотом по title
+                        code = find_slot_by_title(msg)
+
+                    if not is_classic():
+                        # если в custom режиме нажали что-то не из слотов
+                        if msg not in {"Перезапись", "Мои записи", "Расписание", "Подробно", "Инструкция"} and not code:
+                            # просто игнор → покажем меню
+                            send_msg(user_id, "Меню:", kb=user_keyboard())
                             continue
 
-                    # pair: выбор слота
-                    if MODE == "pair":
-                        code = pair_slot_codes_by_label(msg)
-                        if code and code in slots:
-                            users = slots[code]["users"]
-                            if fullname_me in users:
-                                send_msg(user_id, "Вы уже записаны в этот слот.", kb=user_keyboard())
-                                continue
-                            if already_booked_count(fullname_me) >= MAX_SLOTS_PER_USER:
-                                send_msg(user_id, "У вас уже есть запись. Используйте «Перезапись».", kb=user_keyboard())
-                                continue
-                            if len(users) >= CAPACITY:
-                                send_msg(user_id, f"Лимит слота ({CAPACITY}) исчерпан.", kb=user_keyboard())
-                                continue
-                            users.append(fullname_me)
-                            save_state()
-                            send_msg(user_id, f"✅ Записаны: {slots[code]['title']}", kb=user_keyboard())
+                    if code:
+                        # общая логика записи в слот
+                        users = slots[code]["users"]
+                        if fullname_me in users:
+                            send_msg(user_id, "Вы уже записаны в этот слот.", kb=user_keyboard())
                             continue
+                        if already_booked_count(fullname_me) >= MAX_SLOTS_PER_USER:
+                            send_msg(user_id, "У вас уже есть запись. Используйте «Перезапись».", kb=user_keyboard())
+                            continue
+                        if len(users) >= CAPACITY:
+                            send_msg(user_id, f"Лимит слота ({CAPACITY}) исчерпан.", kb=user_keyboard())
+                            continue
+                        users.append(fullname_me)
+                        save_state()
+                        pending_date.pop(user_id, None)
+                        send_msg(user_id, f"✅ Записаны: {slots[code]['title']}", kb=user_keyboard())
+                        continue
 
                     if msg == "Перезапись":
                         remove_user_from_all_slots(fullname_me)
@@ -871,7 +921,7 @@ try:
                     if msg == "Инструкция":
                         txt = (
                             "📘 Инструкция администратора\n\n"
-                            "Текущий режим слотов: " + _mode_str() + f" ({MODE})\n\n"
+                            "Текущий режим слотов: " + _mode_str() + "\n\n"
                             "• «Расписание» — кратко; кнопка «Подробно» — со списками.\n\n"
                             "• «Ученики» → список всех участников (без админов).\n\n"
                             "• «Админы» → список администраторов.\n\n"
@@ -879,15 +929,27 @@ try:
                             "• «Редактировать» → Записать/Удалить ученика вручную "
                             "(по порядковому номеру списка/ФИО/id).\n\n"
                             "Команды:\n"
-                            "/get — просмотр актуальных параметров даты и времени.\n\n"
+                            "/get — просмотр актуальных параметров и слотов.\n\n"
                             "/set d1 d2 t1 t2 [cap] [max]\n"
                             "  d2 = '-' → использовать только один день (d1).\n"
-                            "  t2 = '-' → использовать только одно время (t1).\n"
-                            "  (режим classic: до 4 слотов в сетке)\n\n"
+                            "  t2 = '-' → использовать только одно время (t1).\n\n"
+                            "Примеры classic:\n"
+                            "• 2 дня × 2 времени:\n"
+                            "  /set 15.11 16.11 16:00-18:00 18:00-20:00 13 1\n\n"
+                            "• 2 дня × 1 время:\n"
+                            "  /set 15.11 16.11 16:00-18:00 - 13 1\n\n"
+                            "• 1 день × 2 времени:\n"
+                            "  /set 15.11 - 16:00-18:00 18:00-20:00 13 1\n\n"
+                            "• 1 день × 1 время:\n"
+                            "  /set 15.11 - 16:00-18:00 - 13 1\n\n"
                             "/setp d1 t1 d2 t2 [cap] [max]\n"
-                            "  слот 1: d1 t1\n"
-                            "  слот 2: d2 t2\n"
-                            "  (режим pair: два произвольных независимых слота)\n\n"
+                            "  — 2 произвольных слота (pair режим).\n"
+                            "  Пример:\n"
+                            "  /setp 06.12 7:00-10:00 10.03 10:00-16:00 5 1\n\n"
+                            "/setx d1 t1 [d2 t2] [d3 t3] [d4 t4] cap max\n"
+                            "  — до 4 произвольных слотов (flex режим).\n"
+                            "  Пример:\n"
+                            "  /setx 18.11 16:00-18:00 18.11 17:00-19:00 20.11 15:00-17:00 13 1\n\n"
                             "/debug_fs — проверить наличие файлов/Gist."
                         )
                         send_msg(user_id, txt, kb=admin_root_keyboard(), admin_view=True)
@@ -952,7 +1014,7 @@ try:
                         "mode": None,
                         "candidates": [],
                         "pending_user": None,
-                        "pending_day": None,
+                        "pending_day": None
                     }
                     admin_states[user_id] = st
 
@@ -1018,37 +1080,37 @@ try:
                     if st["mode"] in {"add", "remove"}:
                         q = msg.strip()
 
-                        # classic: выбор дня/времени после выбора ученика
-                        if MODE == "classic":
-                            if st["mode"] == "add" and st.get("pending_user") and q in _active_days():
-                                st["pending_day"] = q
-                                send_msg(
-                                    user_id,
-                                    f"День {q} выбран. Теперь выберите время:",
-                                    kb=admin_choose_time_keyboard(),
-                                    admin_view=True
-                                )
-                                continue
+                        # ДОБАВЛЕНИЕ — выбор слота после выбора ученика
+                        if st["mode"] == "add" and st.get("pending_user"):
+                            if is_classic():
+                                # сначала при classic выбираем день/время
+                                if q in _active_days():
+                                    st["pending_day"] = q
+                                    send_msg(
+                                        user_id,
+                                        f"День {q} выбран. Теперь выберите время:",
+                                        kb=admin_choose_time_keyboard(),
+                                        admin_view=True
+                                    )
+                                    continue
+                                if q in _active_times():
+                                    date_str = st.get("pending_day")
+                                    if not date_str:
+                                        send_msg(
+                                            user_id,
+                                            "Сначала выберите день.",
+                                            kb=admin_choose_day_keyboard(),
+                                            admin_view=True
+                                        )
+                                        continue
+                                    code = slot_code_by(date_str, q)
+                                else:
+                                    code = None
+                            else:
+                                # custom режим: ждем нажатия по title слота
+                                code = find_slot_by_title(q)
 
-                            if st["mode"] == "add" and st.get("pending_user") and q in _active_times():
-                                date_str = st.get("pending_day")
-                                if not date_str:
-                                    send_msg(
-                                        user_id,
-                                        "Сначала выберите день.",
-                                        kb=admin_choose_day_keyboard(),
-                                        admin_view=True
-                                    )
-                                    continue
-                                code = slot_code_by(date_str, q)
-                                if not code or code not in slots:
-                                    send_msg(
-                                        user_id,
-                                        "Не удалось определить слот.",
-                                        kb=admin_edit_keyboard(),
-                                        admin_view=True
-                                    )
-                                    continue
+                            if st["mode"] == "add" and st.get("pending_user") and code:
                                 uid, nm = st["pending_user"]
                                 if already_booked_count(nm) >= MAX_SLOTS_PER_USER:
                                     send_msg(
@@ -1085,48 +1147,7 @@ try:
                                 admin_states.pop(user_id, None)
                                 continue
 
-                        # pair: выбор слота после выбора ученика
-                        if MODE == "pair":
-                            if st["mode"] == "add" and st.get("pending_user"):
-                                code = pair_slot_codes_by_label(q)
-                                if code and code in slots:
-                                    uid, nm = st["pending_user"]
-                                    if already_booked_count(nm) >= MAX_SLOTS_PER_USER:
-                                        send_msg(
-                                            user_id,
-                                            f"У {nm} уже есть запись. Сначала удалите.",
-                                            kb=admin_edit_keyboard(),
-                                            admin_view=True
-                                        )
-                                        continue
-                                    if nm in slots[code]["users"]:
-                                        send_msg(
-                                            user_id,
-                                            f"{nm} уже записан в этот слот.",
-                                            kb=admin_edit_keyboard(),
-                                            admin_view=True
-                                        )
-                                        continue
-                                    if len(slots[code]["users"]) >= CAPACITY:
-                                        send_msg(
-                                            user_id,
-                                            "Слот заполнен.",
-                                            kb=admin_edit_keyboard(),
-                                            admin_view=True
-                                        )
-                                        continue
-                                    slots[code]["users"].append(nm)
-                                    save_state()
-                                    send_msg(
-                                        user_id,
-                                        f"✅ Записал: {nm} → {slots[code]['title']}",
-                                        kb=admin_root_keyboard(),
-                                        admin_view=True
-                                    )
-                                    admin_states.pop(user_id, None)
-                                    continue
-
-                        # выбор по номеру из списка
+                        # выбор по номеру из списка учеников / записанных
                         chosen: Optional[Tuple[int, str]] = None
                         if q.isdigit() and st.get("candidates"):
                             idx = int(q) - 1
@@ -1134,7 +1155,6 @@ try:
                             if 0 <= idx < len(cand):
                                 chosen = cand[idx]
 
-                        # если не номер — поиск по ФИО/id / среди записанных
                         if not chosen:
                             if st["mode"] == "add":
                                 if not members_cache:
@@ -1191,7 +1211,8 @@ try:
                         uid, nm = chosen
                         if st["mode"] == "add":
                             st["pending_user"] = (uid, nm)
-                            if MODE == "classic":
+                            # В classic: сначала день; в custom: сразу слоты
+                            if is_classic():
                                 send_msg(
                                     user_id,
                                     f"Выбрали: {nm}\nТеперь выберите день:",
@@ -1202,7 +1223,7 @@ try:
                                 send_msg(
                                     user_id,
                                     f"Выбрали: {nm}\nТеперь выберите слот:",
-                                    kb=pair_slot_keyboard_admin(),
+                                    kb=slots_keyboard(),
                                     admin_view=True
                                 )
                             continue
@@ -1237,3 +1258,11 @@ try:
 
 except KeyboardInterrupt:
     print("\n🛑 Бот остановлен пользователем (Ctrl+C). До встречи!")
+
+# ПАМЯТКА:
+# 1) В Render добавь переменные GIST_TOKEN и GIST_ID.
+# 2) В приватном Gist создай файлы state.json и config_state.json с содержимым {}.
+# 3) /set, /setp, /setx пересобирают слоты и очищают записи, всё сразу пишется в локальные файлы и Gist.
+# 4) При перезапуске/редеплое сперва читаем из Gist, затем из локальных файлов.
+# 5) В classic режиме «Выбрать» работает через выбор даты/времени.
+#    В pair/flex режимах «Выбрать» показывает кнопки слотов с текстом «дата время».
