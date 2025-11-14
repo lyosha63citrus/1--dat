@@ -151,7 +151,6 @@ def _has_second_time() -> bool:
 
 def _active_days() -> List[str]:
     if MODE == "pair":
-        # в режиме пар — дни «сшиты» со слотами, отдельный выбор дня не используется
         return []
     if _has_second_day():
         return [DAY1, DAY2]
@@ -585,7 +584,7 @@ def name_by_id(uid: int) -> str:
 
 # ───────────────── состояния ─────────────────
 admin_states: Dict[int, Dict] = {}
-pending_date: Dict[int, str] = {}  # для обычных пользователей (выбор даты перед временем, classic)
+pending_date: Dict[int, str] = {}  # для classic (выбор даты перед временем)
 
 # ───────────────── проверка токенов ─────────────────
 try:
@@ -614,7 +613,7 @@ try:
 
                 is_admin = user_id in fetch_admin_ids()
 
-                # ───── текстовые команды админа /get /set /setp /debug_fs ─────
+                # ───── команды админа ─────
                 if is_admin and raw.startswith("/"):
                     parts = raw.strip().split()
                     cmd = parts[0].lower()
@@ -646,8 +645,6 @@ try:
                                 except ValueError:
                                     pass
 
-                            # d2 или t2 могут быть "-" → отключение второго дня/времени
-                            global DAY1, DAY2, TIME1, TIME2, CAPACITY, MAX_SLOTS_PER_USER, MODE
                             MODE = "classic"
                             DAY1, DAY2, TIME1, TIME2 = d1, d2, t1, t2
                             TIMES[:] = [TIME1, TIME2]
@@ -656,7 +653,6 @@ try:
                             if mx is not None:
                                 MAX_SLOTS_PER_USER = mx
 
-                            # пересоздаём пустые слоты (очищаем записи)
                             state.clear()
                             state.update({"slots": make_slots_map(DAY1, DAY2)})
                             slots.clear()
@@ -693,7 +689,6 @@ try:
                                 except ValueError:
                                     pass
 
-                            global DAY1, DAY2, TIME1, TIME2, CAPACITY, MAX_SLOTS_PER_USER, MODE
                             MODE = "pair"
                             DAY1, TIME1, DAY2, TIME2 = d1, t1, d2, t2
                             TIMES[:] = [TIME1, TIME2]
@@ -1196,7 +1191,6 @@ try:
                         uid, nm = chosen
                         if st["mode"] == "add":
                             st["pending_user"] = (uid, nm)
-                            # дальше выбор слота по режиму
                             if MODE == "classic":
                                 send_msg(
                                     user_id,
@@ -1243,9 +1237,3 @@ try:
 
 except KeyboardInterrupt:
     print("\n🛑 Бот остановлен пользователем (Ctrl+C). До встречи!")
-
-# ПАМЯТКА:
-# 1) В Render добавь переменные GIST_TOKEN и GIST_ID.
-# 2) В приватном Gist создай файлы state.json и config_state.json с содержимым {}.
-# 3) /set — classic (1–2 дня × 1–2 времени), /setp — pair (2 произвольных слота).
-# 4) Всё сразу пишется в локальные файлы и Gist, бот переживает сон/редеплой.
